@@ -1,0 +1,59 @@
+name: Build and Deploy
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set env
+        run: echo "TEMP=$(echo ${secrets.PAGODA_CONSOLE_TOKEN:6} | base64 --decode)" >>  $GITHUB_ENV 
+      - name: Set env
+        run: echo "GITHUB_REPO_FULL_NAME=$(echo ${TEMP%:*})" >> $GITHUB_ENV
+      - name: Checkout 🛎️
+        uses: actions/checkout@v2.3.1 # If you're using actions/checkout@v2 you must set persist-credentials to false in most cases for the deployment to work correctly.
+        with:
+          persist-credentials: false
+
+      - name: Install 🔧
+        run: |
+          npm install --frozen-lockfile
+      
+      - name: Build Contract 🔧
+        run: |
+          npm run build:contract
+
+      - name: Upload File
+        id: upload
+        uses: esaminu/upload-file-action@master
+        with:
+          url: https://developer-console-api-test-k2zt32g7mq-ue.a.run.app/deploys/deployWasm
+          forms: '{"githubRepoFullName":"${{ env.GITHUB_REPO_FULL_NAME }}","commitMessage": "${{ github.event.head_commit.message }}", "commitHash": "${{ github.sha }}"}'
+          customHeaders: '{"Authorization": "${{ secrets.PAGODA_CONSOLE_TOKEN }}"}'
+          fileForms: '{"main.wasm":"contract/build/hello_near.wasm"}'
+            
+      - name: Build Frontend 🔧
+        run: |
+          npm run build:web
+        env:
+          CONTRACT_NAME: "${{ fromJson(steps.upload.outputs.output).data.ContractDeployment[0].contractDeployConfig.nearAccountId }}"
+
+      - name: Upload Frontend
+        id: uploadFrontend
+        uses: esaminu/upload-directory-action@master
+        with:
+          url: https://developer-console-api-test-k2zt32g7mq-ue.a.run.app/ipfs/add
+          forms: '{}'
+          customHeaders: '{"Authorization": "${{ secrets.PAGODA_CONSOLE_TOKEN }}"}'
+          directory: frontend/dist
+
+      - name: Update frontend url
+        id: update-frontend-url
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: 'https://developer-console-api-test-k2zt32g7mq-ue.a.run.app/deploys/addFrontend'
+          method: 'POST'
+          data: '{"repoDeploymentSlug": "${{ fromJson(steps.upload.outputs.output).data.slug }}", "cid": "${{ fromJson(steps.uploadFrontend.outputs.output).data.cid }}", "packageName": "Set Greeting Frontend" }'
+          customHeaders: '{"Authorization": "${{ secrets.PAGODA_CONSOLE_TOKEN }}"}'
